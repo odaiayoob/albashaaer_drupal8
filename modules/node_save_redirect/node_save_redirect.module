@@ -1,0 +1,143 @@
+<?php
+
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\node\Entity\Node;
+use Drupal\node\Entity\NodeType;
+use Drupal\node\NodeTypeInterface;
+use Drupal\Component\Utility\UrlHelper;
+use Drupal\node\NodeInterface;
+
+
+/**
+ * @param $form
+ * @param FormStateInterface $form_state
+ * @param $form_id
+ */
+function node_save_redirect_form_node_type_edit_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+
+  /** @var \Drupal\node\NodeTypeInterface $type */
+  $type = $form_state->getFormObject()->getEntity();
+
+  // Add the redirect options to the submissions tab.
+  $form['submission']['node_save_redirect_type'] = array(
+    '#type' => 'radios',
+    '#title' => t('Redirect destination'),
+    '#options' => array(
+      0 => t('Default'),
+      1 => t('Return to the editing page.'),
+      2 => t('View the newly created content.'),
+      3 => t('Re-direct to the content overview page.'),
+      4 => t('Re-direct to another location')
+    ),
+    '#description' => t('Select where the user should be redirected to after creating a new piece of content.'),
+    '#default_value' => $type->getThirdPartySetting('node_save_redirect', 'node_save_redirect_type', 0),
+  );
+
+  // Add a textfield to the submission vertical tab.
+  $form['submission']['node_save_redirect_location'] = array(
+    '#type' => 'textfield',
+    '#title' => 'Enter a custom redirect location',
+    '#default_value' => $type->getThirdPartySetting('node_save_redirect', 'node_save_redirect_location', ''),
+    '#states' => array(
+      'visible' => array(
+        ':input[name="node_save_redirect_type"]' => array('value' => '4'),
+      ),
+    )
+  );
+
+  // Destination overide.
+  $form['submission']['node_save_redirect_destination'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Ignore destination parameter in URLS'),
+    '#description' => t('If checked any destination parameter set in the URL will be ignored, otherwise the destination parameter will overide any option set here.'),
+    '#default_value' => $type->getThirdPartySetting('node_save_redirect', 'node_save_redirect_destination', 0),
+  );
+
+  $form['#entity_builders'][] = 'node_save_redirect_form_node_type_form_builder';
+}
+
+
+/**
+ * Entity builder for the node type form with redirect locations.
+ *
+ * @see node_save_redirect_form_node_type_edit_form_alter().
+ */
+function node_save_redirect_form_node_type_form_builder($entity_type, NodeTypeInterface $type, &$form, FormStateInterface $form_state) {
+  $type->setThirdPartySetting('node_save_redirect', 'node_save_redirect_type', $form_state->getValue('node_save_redirect_type'));
+  $type->setThirdPartySetting('node_save_redirect', 'node_save_redirect_location', $form_state->getValue('node_save_redirect_location'));
+  $type->setThirdPartySetting('node_save_redirect', 'node_save_redirect_destination', $form_state->getValue('node_save_redirect_destination'));
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter() for node_form.
+ *
+ * Adds a new submit hook to the node form.
+ *
+ * @see node_save_redirect_form_node_form_submit()
+ */
+function node_save_redirect_form_node_form_alter(&$form, FormStateInterface $form_state) {
+  foreach (array_keys($form['actions']) as $action) {
+    if ($action != 'preview' && isset($form['actions'][$action]['#type']) && $form['actions'][$action]['#type'] === 'submit') {
+      $form['actions'][$action]['#submit'][] = 'node_save_redirect_form_node_form_submit';
+    }
+  }
+}
+
+
+/**
+ * Implements hook_form_BASE_FORM_ID_submit() for node_form.
+ * @param $form
+ * @param FormStateInterface $form_state
+ */
+function node_save_redirect_form_node_form_submit($form, FormStateInterface $form_state) {
+
+  /** @var \Drupal\node\NodeTypeInterface $type */
+  $node = $form_state->getFormObject()->getEntity();
+
+  $type = NodeType::load($node->bundle());
+
+  $node_save_redirect_type = $type->getThirdPartySetting('node_save_redirect', 'node_save_redirect_type', 0);
+  $node_save_redirect_location = $type->getThirdPartySetting('node_save_redirect', 'node_save_redirect_location', '');
+  $node_save_redirect_destination = $type->getThirdPartySetting('node_save_redirect', 'node_save_redirect_destination', '');
+
+  // Optionally destroy the destination parameter.
+  if ($node_save_redirect_destination) {
+    $request = \Drupal::request();
+    if ($request->query->has('destination')) {
+      $request->query->remove('destination');
+    }
+  }
+
+
+  if ($node_save_redirect_type) {
+    switch ($node_save_redirect_type) {
+      case "1":
+        if ($redirect = \Drupal::pathValidator()
+          ->getUrlIfValid('node/' . $node->id() . '/edit')
+        ) {
+          $form_state->setRedirectUrl($redirect);
+        }
+        break;
+      case "2":
+        if ($redirect = \Drupal::pathValidator()
+          ->getUrlIfValid('node/' . $node->id())
+        ) {
+          $form_state->setRedirectUrl($redirect);
+        }
+        break;
+      case "3":
+        if ($redirect = \Drupal::pathValidator()
+          ->getUrlIfValid('admin/content')
+        ) {
+          $form_state->setRedirectUrl($redirect);
+        }
+
+        break;
+      case "4":
+        $redirect = \Drupal::pathValidator()
+          ->getUrlIfValid($node_save_redirect_location);
+        $form_state->setRedirectUrl($redirect);
+        break;
+    }
+  }
+}
